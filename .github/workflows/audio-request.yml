@@ -73,6 +73,8 @@ jobs:
       - name: Download audio as MP3 (retry ladder)
         id: dl
         if: steps.guard.outputs.done == 'false'
+        env:
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
         run: |
           mkdir -p out
           URL="${{ steps.link.outputs.url }}"
@@ -80,6 +82,13 @@ jobs:
           JSRT=()
           if [ -n "${NODE_BIN:-}" ]; then
             JSRT=(--js-runtimes "node:$NODE_BIN")
+          fi
+          # Optional: owner-provided YouTube cookies (repo secret YT_COOKIES,
+          # Netscape cookies.txt content) to pass login-based bot checks
+          COOKIE=()
+          if [ -n "${YT_COOKIES:-}" ]; then
+            printf '%s' "$YT_COOKIES" > cookies.txt
+            COOKIE=(--cookies cookies.txt)
           fi
           # Try several YouTube player clients; first success wins.
           # (YouTube bot-checks datacenter IPs; different clients get through.)
@@ -94,8 +103,9 @@ jobs:
               -f "bestaudio/best" \
               --extract-audio --audio-format mp3 --audio-quality 192K \
               --restrict-filenames \
+              --impersonate chrome \
               -o "out/%(title).60s-%(id)s.%(ext)s" \
-              "${JSRT[@]}" "${ARGS[@]}" "$URL" 2>err.log; then
+              "${JSRT[@]}" "${COOKIE[@]}" "${ARGS[@]}" "$URL" 2>err.log; then
               echo "reason=" >> "$GITHUB_OUTPUT"
               break
             fi
