@@ -1,22 +1,29 @@
 # Audio Downloader
 
-Paste a link, get an MP3. That's it.
+Paste a link, get an MP3.
 
-## Use (2 steps)
+## 🌐 Use in browser (no install)
 
-1. Install what it needs (one time):
-   ```
-   pip install -r requirements.txt
-   ```
-   For video links (YouTube etc.) also install ffmpeg: https://ffmpeg.org/download.html
+**Live web app:** https://saikumarvasa100-hash.github.io/audio-downloader/
 
-2. Run it:
-   ```
-   python download_audio.py
-   ```
-   Or double-click `download_audio.bat` on Windows.
+Open it, paste a link, press **Get audio**.
+- Direct audio links download right in the page.
+- Video pages (YouTube etc.) can't be converted by a static page alone —
+  for those, use the full version below (free, ~2 min setup).
 
-Paste a link when asked. MP3 is saved to `Downloads/Audio`.
-Paste another link, or type `q` to quit.
+## Full version — any link including YouTube (free web app)
 
-Works with YouTube, Vimeo, SoundCloud, and direct mp3 links.
+1. Go to https://huggingface.co/new-spaces
+2. Create a Space with SDK **Gradio**, then upload `app.py` + `requirements.txt` from this repo.
+3. Open your Space URL, paste any link, get MP3. Share that URL with anyone.
+
+## 💻 Run on your computer
+
+```
+pip install -r requirements.txt
+python download_audio.py
+```
+Or double-click `download_audio.bat` on Windows.
+
+MP3s save to `Downloads/Audio`. Paste another link, or type `q` to quit.
+For video links you also need ffmpeg: https://ffmpeg.org/download.html

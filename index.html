@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Audio Downloader — paste a link, get MP3</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; max-width: 560px; margin: 40px auto; padding: 0 16px; color: #111; }
+  h1 { font-size: 1.6rem; }
+  p.sub { color: #555; margin-top: -8px; }
+  .row { display: flex; gap: 8px; margin-top: 16px; }
+  input { flex: 1; padding: 12px; font-size: 1rem; border: 1px solid #ccc; border-radius: 8px; }
+  button { padding: 12px 18px; font-size: 1rem; border: 0; border-radius: 8px; background: #111; color: #fff; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { margin-top: 16px; color: #555; min-height: 1.5em; }
+  #result { margin-top: 12px; display: none; border: 1px solid #e2e2e2; border-radius: 10px; padding: 14px; }
+  audio { width: 100%; margin-top: 8px; }
+  a.dl { display: inline-block; margin-top: 10px; padding: 10px 16px; background: #0a7d2c; color: #fff; border-radius: 8px; text-decoration: none; }
+  .fallback { margin-top: 12px; display: none; background: #fff8e6; border: 1px solid #f0d48a; border-radius: 10px; padding: 14px; }
+  code { background: #f2f2f2; padding: 2px 6px; border-radius: 6px; }
+  footer { margin-top: 28px; color: #888; font-size: .85rem; }
+</style>
+</head>
+<body>
+  <h1>🎧 Audio Downloader</h1>
+  <p class="sub">Paste a link, get the audio. No install.</p>
+
+  <div class="row">
+    <input id="url" type="url" placeholder="Paste link here… (https://…)" autocomplete="off" />
+    <button id="go">Get audio</button>
+  </div>
+  <div id="status"></div>
+
+  <div id="result">
+    <strong>Ready ✅</strong>
+    <audio id="player" controls></audio><br />
+    <a id="dl" class="dl" href="#" download>⬇ Download audio</a>
+  </div>
+
+  <div id="fallback" class="fallback"></div>
+
+  <footer>
+    Direct audio links download right here. Video pages (YouTube etc.) need the
+    <a href="https://github.com/saikumarvasa100-hash/audio-downloader">full version</a>
+    (one-click Hugging Face deploy, or <code>python download_audio.py</code>).
+  </footer>
+
+<script>
+const $ = id => document.getElementById(id);
+const DIRECT_RE = /\.(mp3|m4a|aac|wav|opus|ogg|flac|wma)(\?|#|$)/i;
+
+// Public cobalt API instances (tried in order). These can change; add your own instance if needed.
+const COBALT_INSTANCES = [
+  "https://api.cobalt.tools/api/json",
+  "https://cobalt-api.meowing.de/api/json"
+];
+
+function fileNameFromUrl(u, fallback) {
+  try {
+    const p = new URL(u).pathname.split("/").pop() || fallback;
+    return decodeURIComponent(p).split("?")[0] || fallback;
+  } catch { return fallback; }
+}
+
+function showAudio(src, filename) {
+  $("player").src = src;
+  const a = $("dl");
+  a.href = src;
+  a.setAttribute("download", filename);
+  $("result").style.display = "block";
+}
+
+async function handleDirect(url) {
+  const name = fileNameFromUrl(url, "audio.mp3");
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const blob = await res.blob();
+    showAudio(URL.createObjectURL(blob), name);
+    return true;
+  } catch (e) {
+    // CORS-blocked hosts can't be fetched, but the browser can still play/download them directly.
+    showAudio(url, name);
+    $("status").textContent = "Note: this host blocks in-page fetching, playing the original link directly.";
+    return true;
+  }
+}
+
+async function tryCobalt(url) {
+  const body = JSON.stringify({ url, downloadMode: "audio", audioFormat: "mp3" });
+  for (const endpoint of COBALT_INSTANCES) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 25000);
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Accept": "application/json", "Content-Type": "application/json" },
+        body, signal: ctrl.signal
+      });
+      clearTimeout(t);
+      if (!res.ok) continue;
+      const data = await res.json();
+      if ((data.status === "tunnel" || data.status === "redirect") && data.url) {
+        return data;
+      }
+      if (data.status === "picker" && data.audio) return { url: data.audio, filename: data.audioFilename || "audio.mp3" };
+    } catch { /* try next instance */ }
+  }
+  return null;
+}
+
+$("go").addEventListener("click", async () => {
+  const url = $("url").value.trim().replace(/^['"]+|['"]+$/g, "");
+  $("result").style.display = "none";
+  $("fallback").style.display = "none";
+  if (!/^https?:\/\//i.test(url)) {
+    $("status").textContent = "Paste a full link starting with https://";
+    return;
+  }
+  $("go").disabled = true;
+  $("status").textContent = "Working…";
+
+  try {
+    if (DIRECT_RE.test(url.split("?")[0].split("#")[0])) {
+      await handleDirect(url);
+      $("status").textContent = "Done!";
+    } else {
+      const r = await tryCobalt(url);
+      if (r) {
+        await handleDirect(r.url);
+        $("status").textContent = "Done!";
+      } else {
+        $("status").textContent = "Couldn't extract audio in the browser for this link.";
+        const f = $("fallback");
+        f.innerHTML = "For video pages like YouTube, use the <strong>full version</strong> (free, 2 min setup):<br><br>" +
+          "1. <a target='_blank' rel='noopener' href='https://huggingface.co/new-spaces'>Deploy app.py on Hugging Face Spaces</a> " +
+          "(upload <code>app.py</code> + <code>requirements.txt</code> from this repo), or<br>" +
+          "2. Run <code>pip install -r requirements.txt</code> then <code>python download_audio.py</code> on your computer.";
+        f.style.display = "block";
+      }
+    }
+  } finally {
+    $("go").disabled = false;
+  }
+});
+
+$("url").addEventListener("keydown", e => { if (e.key === "Enter") $("go").click(); });
+</script>
+</body>
+</html>
