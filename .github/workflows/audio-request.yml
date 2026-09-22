@@ -33,7 +33,12 @@ jobs:
         run: |
           NUM="${{ inputs.issue_number || github.event.issue.number }}"
           echo "num=$NUM" >> "$GITHUB_OUTPUT"
-          if gh issue view "$NUM" --repo ${{ github.repository }} --json comments -q '.comments[].body' | grep -q "AUDIO_BOT_OK"; then
+          COMMENTS=$(gh issue view "$NUM" --repo ${{ github.repository }} --json comments -q '.comments[].body')
+          if printf '%s' "$COMMENTS" | grep -q "AUDIO_BOT_OK"; then
+            echo "done=true" >> "$GITHUB_OUTPUT"
+          elif printf '%s' "$COMMENTS" | grep -q "AUDIO_BOT_FAIL" && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            # Already attempted by an earlier duplicate run; don't comment twice.
+            # Owner can still force a retry via manual dispatch.
             echo "done=true" >> "$GITHUB_OUTPUT"
           else
             echo "done=false" >> "$GITHUB_OUTPUT"
@@ -60,6 +65,8 @@ jobs:
           pip install -U yt-dlp bgutil-ytdlp-pot-provider
           # PO-token helper (helps pass YouTube bot checks on datacenter IPs)
           git clone --depth 1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git ~/bgutil-ytdlp-pot-provider
+          # yt-dlp + the helper need a JS runtime; point at the runner's node
+          echo "NODE_BIN=$(command -v node || true)" >> "$GITHUB_ENV"
           ffmpeg -version | head -n 1
           yt-dlp --version
 
@@ -69,6 +76,11 @@ jobs:
         run: |
           mkdir -p out
           URL="${{ steps.link.outputs.url }}"
+          # JS runtime lets yt-dlp + the PO-token helper run challenges
+          JSRT=()
+          if [ -n "${NODE_BIN:-}" ]; then
+            JSRT=(--js-runtimes "node:$NODE_BIN")
+          fi
           # Try several YouTube player clients; first success wins.
           # (YouTube bot-checks datacenter IPs; different clients get through.)
           for CLIENT in "" "android,web" "tv" "web"; do
@@ -83,7 +95,7 @@ jobs:
               --extract-audio --audio-format mp3 --audio-quality 192K \
               --restrict-filenames \
               -o "out/%(title).60s-%(id)s.%(ext)s" \
-              "${ARGS[@]}" "$URL" 2>err.log; then
+              "${JSRT[@]}" "${ARGS[@]}" "$URL" 2>err.log; then
               echo "reason=" >> "$GITHUB_OUTPUT"
               break
             fi
