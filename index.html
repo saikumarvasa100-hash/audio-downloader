@@ -38,16 +38,29 @@
 
   <footer>
     Works with direct audio files (.mp3, .m4a, .wav, .ogg, .opus, .flac…).
+    For video links (YouTube etc.), use the computer script:
+    <a href="https://github.com/saikumarvasa100-hash/audio-downloader">GitHub repo</a>.
   </footer>
 
 <script>
 const $ = id => document.getElementById(id);
+const AUDIO_EXT = /\.(mp3|m4a|aac|wav|opus|ogg|flac|wma)(\?|#|$)/i;
 
 function fileNameFromUrl(u, fallback) {
   try {
     const p = new URL(u).pathname.split("/").pop() || fallback;
     return decodeURIComponent(p).split("?")[0] || fallback;
   } catch { return fallback; }
+}
+
+function offerDownload(blob, filename) {
+  const src = URL.createObjectURL(blob);
+  $("player").src = src;
+  const a = $("dl");
+  a.href = src;
+  a.setAttribute("download", filename);
+  $("result").style.display = "block";
+  $("status").textContent = "Done!";
 }
 
 $("go").addEventListener("click", async () => {
@@ -57,28 +70,34 @@ $("go").addEventListener("click", async () => {
     $("status").textContent = "Paste a full link starting with https://";
     return;
   }
+  const looksAudio = AUDIO_EXT.test(url.split("?")[0].split("#")[0]);
   $("go").disabled = true;
   $("status").textContent = "Downloading…";
   try {
-    const name = fileNameFromUrl(url, "audio.mp3");
-    try {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      const src = URL.createObjectURL(await res.blob());
-      $("player").src = src;
-      const a = $("dl");
-      a.href = src;
-      a.setAttribute("download", name);
-      $("status").textContent = "Done!";
-    } catch (e) {
-      // Hosts that block in-page fetching still play/download directly.
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const type = (res.headers.get("content-type") || "").toLowerCase();
+    const blob = await res.blob();
+    const isAudio = type.startsWith("audio/") || type.includes("ogg") || type.includes("mpeg") ||
+      blob.type.startsWith("audio/") || looksAudio;
+    if (!isAudio) {
+      $("status").textContent = "That's a video/web page, not an audio file — this page only downloads direct audio links (.mp3 etc.). For video links, use the computer script from the GitHub repo.";
+      return;
+    }
+    offerDownload(blob, fileNameFromUrl(url, "audio.mp3"));
+  } catch (e) {
+    if (looksAudio) {
+      // Host blocks in-page fetching; let the browser handle the file URL itself.
+      const name = fileNameFromUrl(url, "audio.mp3");
       $("player").src = url;
       const a = $("dl");
       a.href = url;
       a.setAttribute("download", name);
-      $("status").textContent = "Done! (playing original link directly)";
+      $("result").style.display = "block";
+      $("status").textContent = "Done! (opened original file directly)";
+    } else {
+      $("status").textContent = "Couldn't download that link. If it's a video page (YouTube etc.), this page can't convert it — paste a direct audio file link instead, or use the computer script for video links.";
     }
-    $("result").style.display = "block";
   } finally {
     $("go").disabled = false;
   }
