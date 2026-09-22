@@ -3,6 +3,11 @@ name: Audio request
 on:
   issues:
     types: [opened, labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number to (re)process"
+        required: true
 
 permissions:
   issues: write
@@ -10,22 +15,25 @@ permissions:
 
 jobs:
   download:
-    # Only run for audio requests (issue form auto-adds the label)
-    if: contains(github.event.issue.labels.*.name, 'audio-request')
+    # Issues trigger: only for audio requests (form auto-adds the label).
+    # Manual trigger: owner retry for a specific issue.
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.issue.labels.*.name, 'audio-request')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
-      group: audio-${{ github.event.issue.number }}
+      group: audio-${{ inputs.issue_number || github.event.issue.number }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
-      - name: Skip if already processed
+      - name: Skip if already done
         id: guard
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh issue view ${{ github.event.issue.number }} --repo ${{ github.repository }} --json comments -q '.comments[].body' | grep -q "AUDIO_BOT_DONE"; then
+          NUM="${{ inputs.issue_number || github.event.issue.number }}"
+          echo "num=$NUM" >> "$GITHUB_OUTPUT"
+          if gh issue view "$NUM" --repo ${{ github.repository }} --json comments -q '.comments[].body' | grep -q "AUDIO_BOT_OK"; then
             echo "done=true" >> "$GITHUB_OUTPUT"
           else
             echo "done=false" >> "$GITHUB_OUTPUT"
@@ -35,8 +43,9 @@ jobs:
         id: link
         if: steps.guard.outputs.done == 'false'
         env:
-          BODY: ${{ github.event.issue.body }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          BODY=$(gh issue view "${{ steps.guard.outputs.num }}" --repo ${{ github.repository }} --json body -q .body)
           URL=$(printf '%s' "$BODY" | grep -oE 'https?://[^ )<>"]+' | head -n 1 || true)
           if [ -z "$URL" ]; then
             echo "No link found in issue body" >&2
@@ -48,48 +57,86 @@ jobs:
         if: steps.guard.outputs.done == 'false'
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-          pip install -U yt-dlp
+          pip install -U yt-dlp bgutil-ytdlp-pot-provider
+          # PO-token helper (helps pass YouTube bot checks on datacenter IPs)
+          git clone --depth 1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git ~/bgutil-ytdlp-pot-provider
           ffmpeg -version | head -n 1
           yt-dlp --version
 
-      - name: Download audio as MP3
+      - name: Download audio as MP3 (retry ladder)
+        id: dl
         if: steps.guard.outputs.done == 'false'
         run: |
           mkdir -p out
-          yt-dlp --no-playlist \
-            -f "bestaudio/best" \
-            --extract-audio --audio-format mp3 --audio-quality 192K \
-            --restrict-filenames \
-            -o "out/%(title).60s-%(id)s.%(ext)s" \
-            "${{ steps.link.outputs.url }}"
+          URL="${{ steps.link.outputs.url }}"
+          # Try several YouTube player clients; first success wins.
+          # (YouTube bot-checks datacenter IPs; different clients get through.)
+          for CLIENT in "" "android,web" "tv" "web"; do
+            rm -rf out && mkdir -p out
+            ARGS=()
+            if [ -n "$CLIENT" ]; then
+              ARGS+=(--extractor-args "youtube:player_client=$CLIENT")
+            fi
+            echo "--- Trying client: ${CLIENT:-default} ---"
+            if yt-dlp --no-playlist \
+              -f "bestaudio/best" \
+              --extract-audio --audio-format mp3 --audio-quality 192K \
+              --restrict-filenames \
+              -o "out/%(title).60s-%(id)s.%(ext)s" \
+              "${ARGS[@]}" "$URL" 2>err.log; then
+              echo "reason=" >> "$GITHUB_OUTPUT"
+              break
+            fi
+            if grep -qi "sign in to confirm\|not a bot" err.log; then
+              echo "reason=bot" >> "$GITHUB_OUTPUT"
+            elif grep -qi "private video\|age verden\|age-confirm\|login required" err.log; then
+              echo "reason=private" >> "$GITHUB_OUTPUT"
+            else
+              echo "reason=other" >> "$GITHUB_OUTPUT"
+            fi
+            tail -n 3 err.log || true
+          done
           ls -la out
+          shopt -s nullglob
+          FILES=(out/*.mp3)
+          if [ ${#FILES[@]} -eq 0 ]; then
+            exit 1
+          fi
 
       - name: Publish to release and comment link
-        if: steps.guard.outputs.done == 'false'
+        if: steps.guard.outputs.done == 'false' && steps.dl.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          NUM="${{ steps.guard.outputs.num }}"
+          REPO="${{ github.repository }}"
           FILE=$(ls out/*.mp3 | head -n 1)
           NAME=$(basename "$FILE")
-          REPO="${{ github.repository }}"
           gh release view audio-downloads --repo "$REPO" >/dev/null 2>&1 || \
             gh release create audio-downloads --repo "$REPO" --title "Audio downloads" --notes "MP3s requested through the web app."
           gh release upload audio-downloads "$FILE" --repo "$REPO" --clobber
           DL="https://github.com/$REPO/releases/download/audio-downloads/$NAME"
-          gh issue comment ${{ github.event.issue.number }} --repo "$REPO" --body "Done! Your MP3 is ready ✅
+          gh issue comment "$NUM" --repo "$REPO" --body "Done! Your MP3 is ready ✅
 
           ⬇️ **Download:** $DL
 
-          <!-- AUDIO_BOT_DONE -->"
-          gh issue close ${{ github.event.issue.number }} --repo "$REPO" --reason completed
+          <!-- AUDIO_BOT_OK -->"
+          gh issue close "$NUM" --repo "$REPO" --reason completed
 
       - name: Comment on failure
         if: failure() && steps.guard.outputs.done == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh issue comment ${{ github.event.issue.number }} --repo ${{ github.repository }} --body "Sorry, I couldn't download that link 😕 (${{ steps.link.outputs.url }})
+          NUM="${{ steps.guard.outputs.num }}"
+          REASON="${{ steps.dl.outputs.reason }}"
+          if [ "$REASON" = "bot" ]; then
+            MSG="YouTube is blocking automatic downloads for this video right now 🤖 (bot check). Please try again in a while, or try another link."
+          elif [ "$REASON" = "private" ]; then
+            MSG="That video looks private, age-restricted, or login-only 🔒, so it can't be downloaded. Try a public link."
+          else
+            MSG="Sorry, I couldn't download that link 😕 (${{ steps.link.outputs.url }}). Try another link."
+          fi
+          gh issue comment "$NUM" --repo ${{ github.repository }} --body "$MSG
 
-          It may be private, age-restricted, or blocking downloads. Try another link.
-
-          <!-- AUDIO_BOT_DONE -->"
+          <!-- AUDIO_BOT_FAIL -->"
