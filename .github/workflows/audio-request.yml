@@ -62,7 +62,7 @@ jobs:
         if: steps.guard.outputs.done == 'false'
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-          pip install -U yt-dlp bgutil-ytdlp-pot-provider
+          pip install -U yt-dlp bgutil-ytdlp-pot-provider curl-cffi
           # PO-token helper (helps pass YouTube bot checks on datacenter IPs)
           git clone --depth 1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git ~/bgutil-ytdlp-pot-provider
           # yt-dlp + the helper need a JS runtime; point at the runner's node
