@@ -1,0 +1,13 @@
+name: "🎧 Audio request"
+description: "Paste a video/audio link, get back an MP3"
+title: "Audio: "
+labels: ["audio-request"]
+body:
+  - type: input
+    id: link
+    attributes:
+      label: "Link"
+      description: "Paste the full link (YouTube, SoundCloud, direct mp3, …)"
+      placeholder: "https://www.youtube.com/watch?v=…"
+    validations:
+      required: true

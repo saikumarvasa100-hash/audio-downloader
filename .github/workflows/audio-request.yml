@@ -1,0 +1,88 @@
+name: Audio request
+
+on:
+  issues:
+    types: [opened, labeled]
+
+permissions:
+  issues: write
+  contents: write
+
+jobs:
+  download:
+    # Only run for audio requests (issue form auto-adds the label)
+    if: contains(github.event.issue.labels.*.name, 'audio-request')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Skip if already processed
+        id: guard
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh issue view ${{ github.event.issue.number }} --json comments -q '.comments[].body' | grep -q "AUDIO_BOT_DONE"; then
+            echo "done=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "done=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract link from issue
+        id: link
+        if: steps.guard.outputs.done == 'false'
+        env:
+          BODY: ${{ github.event.issue.body }}
+        run: |
+          URL=$(printf '%s' "$BODY" | grep -oE 'https?://[^ )<>"]+' | head -n 1 || true)
+          if [ -z "$URL" ]; then
+            echo "No link found in issue body" >&2
+            exit 1
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Set up tools
+        if: steps.guard.outputs.done == 'false'
+        run: |
+          pip install -U yt-dlp
+          ffmpeg -version | head -n 1
+          yt-dlp --version
+
+      - name: Download audio as MP3
+        if: steps.guard.outputs.done == 'false'
+        run: |
+          mkdir -p out
+          yt-dlp --no-playlist \
+            -f "bestaudio/best" \
+            --extract-audio --audio-format mp3 --audio-quality 192K \
+            --restrict-filenames \
+            -o "out/%(title).60s-%(id)s.%(ext)s" \
+            "${{ steps.link.outputs.url }}"
+          ls -la out
+
+      - name: Publish to release and comment link
+        if: steps.guard.outputs.done == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FILE=$(ls out/*.mp3 | head -n 1)
+          NAME=$(basename "$FILE")
+          gh release view audio-downloads >/dev/null 2>&1 || \
+            gh release create audio-downloads --title "Audio downloads" --notes "MP3s requested through the web app."
+          gh release upload audio-downloads "$FILE" --clobber
+          DL="https://github.com/${{ github.repository }}/releases/download/audio-downloads/$NAME"
+          gh issue comment ${{ github.event.issue.number }} --body "Done! Your MP3 is ready ✅
+
+          ⬇️ **Download:** $DL
+
+          <!-- AUDIO_BOT_DONE -->"
+          gh issue close ${{ github.event.issue.number }} --reason completed
+
+      - name: Comment on failure
+        if: failure() && steps.guard.outputs.done == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment ${{ github.event.issue.number }} --body "Sorry, I couldn't download that link 😕 (${{ steps.link.outputs.url }})
+
+          It may be private, age-restricted, or blocking downloads. Try another link.
+
+          <!-- AUDIO_BOT_DONE -->"

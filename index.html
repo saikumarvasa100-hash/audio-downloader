@@ -10,21 +10,22 @@
   h1 { font-size: 1.6rem; }
   p.sub { color: #555; margin-top: -8px; }
   .row { display: flex; gap: 8px; margin-top: 16px; }
-  input { flex: 1; padding: 12px; font-size: 1rem; border: 1px solid #ccc; border-radius: 8px; }
-  button { padding: 12px 18px; font-size: 1rem; border: 0; border-radius: 8px; background: #111; color: #fff; cursor: pointer; }
+  input { flex: 1; padding: 12px; font-size: 1rem; border: 1px solid #ccc; border-radius: 8px; min-width: 0; }
+  button { padding: 12px 18px; font-size: 1rem; border: 0; border-radius: 8px; background: #111; color: #fff; cursor: pointer; white-space: nowrap; }
   button:disabled { opacity: .5; cursor: default; }
   #status { margin-top: 16px; color: #555; min-height: 1.5em; }
   #result { margin-top: 12px; display: none; border: 1px solid #e2e2e2; border-radius: 10px; padding: 14px; }
   audio { width: 100%; margin-top: 8px; }
-  a.dl { display: inline-block; margin-top: 10px; padding: 10px 16px; background: #0a7d2c; color: #fff; border-radius: 8px; text-decoration: none; }
-  .fallback { margin-top: 12px; display: none; background: #fff8e6; border: 1px solid #f0d48a; border-radius: 10px; padding: 14px; }
+  a.dl { display: inline-block; margin-top: 10px; padding: 12px 18px; background: #0a7d2c; color: #fff; border-radius: 8px; text-decoration: none; font-weight: 600; }
+  .fallback { margin-top: 12px; display: none; background: #eef6ff; border: 1px solid #b9d6f5; border-radius: 10px; padding: 14px; }
   code { background: #f2f2f2; padding: 2px 6px; border-radius: 6px; }
   footer { margin-top: 28px; color: #888; font-size: .85rem; }
+  ol { padding-left: 20px; }
 </style>
 </head>
 <body>
   <h1>🎧 Audio Downloader</h1>
-  <p class="sub">Paste a link, get the audio. No install.</p>
+  <p class="sub">Paste a link, get the audio as MP3. No install.</p>
 
   <div class="row">
     <input id="url" type="url" placeholder="Paste link here… (https://…)" autocomplete="off" />
@@ -41,20 +42,14 @@
   <div id="fallback" class="fallback"></div>
 
   <footer>
-    Direct audio links download right here. Video pages (YouTube etc.) need the
-    <a href="https://github.com/saikumarvasa100-hash/audio-downloader">full version</a>
-    (one-click Hugging Face deploy, or <code>python download_audio.py</code>).
+    Direct audio links download instantly, right here. Video links (YouTube etc.)
+    are converted by a free bot — takes about a minute, needs a free GitHub login.
   </footer>
 
 <script>
 const $ = id => document.getElementById(id);
 const DIRECT_RE = /\.(mp3|m4a|aac|wav|opus|ogg|flac|wma)(\?|#|$)/i;
-
-// Public cobalt API instances (tried in order). These can change; add your own instance if needed.
-const COBALT_INSTANCES = [
-  "https://api.cobalt.tools/api/json",
-  "https://cobalt-api.meowing.de/api/json"
-];
+const REPO = "https://github.com/saikumarvasa100-hash/audio-downloader";
 
 function fileNameFromUrl(u, fallback) {
   try {
@@ -76,38 +71,27 @@ async function handleDirect(url) {
   try {
     const res = await fetch(url);
     if (!res.ok) throw new Error("HTTP " + res.status);
-    const blob = await res.blob();
-    showAudio(URL.createObjectURL(blob), name);
-    return true;
+    showAudio(URL.createObjectURL(await res.blob()), name);
   } catch (e) {
     // CORS-blocked hosts can't be fetched, but the browser can still play/download them directly.
     showAudio(url, name);
     $("status").textContent = "Note: this host blocks in-page fetching, playing the original link directly.";
-    return true;
+    return;
   }
+  $("status").textContent = "Done!";
 }
 
-async function tryCobalt(url) {
-  const body = JSON.stringify({ url, downloadMode: "audio", audioFormat: "mp3" });
-  for (const endpoint of COBALT_INSTANCES) {
-    try {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 25000);
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Accept": "application/json", "Content-Type": "application/json" },
-        body, signal: ctrl.signal
-      });
-      clearTimeout(t);
-      if (!res.ok) continue;
-      const data = await res.json();
-      if ((data.status === "tunnel" || data.status === "redirect") && data.url) {
-        return data;
-      }
-      if (data.status === "picker" && data.audio) return { url: data.audio, filename: data.audioFilename || "audio.mp3" };
-    } catch { /* try next instance */ }
-  }
-  return null;
+function showRequestButton(url) {
+  $("status").textContent = "Video link detected.";
+  const f = $("fallback");
+  const issueUrl = REPO + "/issues/new?template=audio-request.yml&link=" + encodeURIComponent(url);
+  f.innerHTML =
+    "<strong>Get the MP3 in about a minute:</strong>" +
+    "<ol><li>Click the button below (opens GitHub, free login).</li>" +
+    "<li>Press <strong>Submit new issue</strong> — your link is already filled in.</li>" +
+    "<li>A bot replies on that page with your <strong>MP3 download link</strong>.</li></ol>" +
+    "<a class='dl' target='_blank' rel='noopener' href='" + issueUrl + "'>⬇ Get MP3</a>";
+  f.style.display = "block";
 }
 
 $("go").addEventListener("click", async () => {
@@ -120,25 +104,11 @@ $("go").addEventListener("click", async () => {
   }
   $("go").disabled = true;
   $("status").textContent = "Working…";
-
   try {
     if (DIRECT_RE.test(url.split("?")[0].split("#")[0])) {
       await handleDirect(url);
-      $("status").textContent = "Done!";
     } else {
-      const r = await tryCobalt(url);
-      if (r) {
-        await handleDirect(r.url);
-        $("status").textContent = "Done!";
-      } else {
-        $("status").textContent = "Couldn't extract audio in the browser for this link.";
-        const f = $("fallback");
-        f.innerHTML = "For video pages like YouTube, use the <strong>full version</strong> (free, 2 min setup):<br><br>" +
-          "1. <a target='_blank' rel='noopener' href='https://huggingface.co/new-spaces'>Deploy app.py on Hugging Face Spaces</a> " +
-          "(upload <code>app.py</code> + <code>requirements.txt</code> from this repo), or<br>" +
-          "2. Run <code>pip install -r requirements.txt</code> then <code>python download_audio.py</code> on your computer.";
-        f.style.display = "block";
-      }
+      showRequestButton(url);
     }
   } finally {
     $("go").disabled = false;
