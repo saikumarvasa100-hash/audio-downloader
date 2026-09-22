@@ -14,13 +14,18 @@ jobs:
     if: contains(github.event.issue.labels.*.name, 'audio-request')
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    concurrency:
+      group: audio-${{ github.event.issue.number }}
+      cancel-in-progress: false
     steps:
+      - uses: actions/checkout@v4
+
       - name: Skip if already processed
         id: guard
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh issue view ${{ github.event.issue.number }} --json comments -q '.comments[].body' | grep -q "AUDIO_BOT_DONE"; then
+          if gh issue view ${{ github.event.issue.number }} --repo ${{ github.repository }} --json comments -q '.comments[].body' | grep -q "AUDIO_BOT_DONE"; then
             echo "done=true" >> "$GITHUB_OUTPUT"
           else
             echo "done=false" >> "$GITHUB_OUTPUT"
@@ -66,23 +71,24 @@ jobs:
         run: |
           FILE=$(ls out/*.mp3 | head -n 1)
           NAME=$(basename "$FILE")
-          gh release view audio-downloads >/dev/null 2>&1 || \
-            gh release create audio-downloads --title "Audio downloads" --notes "MP3s requested through the web app."
-          gh release upload audio-downloads "$FILE" --clobber
-          DL="https://github.com/${{ github.repository }}/releases/download/audio-downloads/$NAME"
-          gh issue comment ${{ github.event.issue.number }} --body "Done! Your MP3 is ready ✅
+          REPO="${{ github.repository }}"
+          gh release view audio-downloads --repo "$REPO" >/dev/null 2>&1 || \
+            gh release create audio-downloads --repo "$REPO" --title "Audio downloads" --notes "MP3s requested through the web app."
+          gh release upload audio-downloads "$FILE" --repo "$REPO" --clobber
+          DL="https://github.com/$REPO/releases/download/audio-downloads/$NAME"
+          gh issue comment ${{ github.event.issue.number }} --repo "$REPO" --body "Done! Your MP3 is ready ✅
 
           ⬇️ **Download:** $DL
 
           <!-- AUDIO_BOT_DONE -->"
-          gh issue close ${{ github.event.issue.number }} --reason completed
+          gh issue close ${{ github.event.issue.number }} --repo "$REPO" --reason completed
 
       - name: Comment on failure
         if: failure() && steps.guard.outputs.done == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh issue comment ${{ github.event.issue.number }} --body "Sorry, I couldn't download that link 😕 (${{ steps.link.outputs.url }})
+          gh issue comment ${{ github.event.issue.number }} --repo ${{ github.repository }} --body "Sorry, I couldn't download that link 😕 (${{ steps.link.outputs.url }})
 
           It may be private, age-restricted, or blocking downloads. Try another link.
 
